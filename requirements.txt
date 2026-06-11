@@ -1,0 +1,7 @@
+streamlit>=1.40
+SQLAlchemy>=2.0
+bcrypt>=4.1
+python-dotenv>=1.0
+pandas>=2.0
+requests>=2.31
+tos>=2.6
