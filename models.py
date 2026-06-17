@@ -32,6 +32,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), default="member")   # 'admin' | 'member'
     token_quota: Mapped[int] = mapped_column(BigInteger, default=0)    # 已分配的总额度
     token_used: Mapped[int] = mapped_column(BigInteger, default=0)     # 已消耗
+    token_reserved: Mapped[int] = mapped_column(BigInteger, default=0) # 运行中任务预占额度
     status: Mapped[str] = mapped_column(String(16), default="active")  # 'active' | 'disabled'
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -41,7 +42,7 @@ class User(Base):
 
     @property
     def token_remaining(self) -> int:
-        return max(self.token_quota - self.token_used, 0)
+        return max(self.token_quota - self.token_used - self.token_reserved, 0)
 
 
 class Generation(Base):
@@ -54,11 +55,20 @@ class Generation(Base):
     params_json: Mapped[str] = mapped_column(Text, default="{}")   # 宽高比/分辨率/时长/seed 等
     task_id: Mapped[str] = mapped_column(String(128), default="", index=True)
     video_url: Mapped[str] = mapped_column(Text, default="")
+    audio_url: Mapped[str] = mapped_column(Text, default="")
+    last_frame_url: Mapped[str] = mapped_column(Text, default="")
     cover_url: Mapped[str] = mapped_column(Text, default="")
+    request_json: Mapped[str] = mapped_column(Text, default="{}")
+    response_json: Mapped[str] = mapped_column(Text, default="{}")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    estimated_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     tokens_used: Mapped[int] = mapped_column(BigInteger, default=0)
     cost_yuan: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|running|succeeded|failed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="generations")
 

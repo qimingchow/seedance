@@ -4,12 +4,18 @@
 """
 from sqlalchemy import func, select
 
+import tos_client
 from database import get_session
 from models import Asset, AssetGroup
 
 
 class AssetError(Exception):
     pass
+
+
+def _asset_url(asset: Asset) -> str:
+    """优先用 tos_key 生成当前配置下的编码 URL，兼容旧数据中的原始 URL。"""
+    return tos_client.access_url(asset.tos_key) if asset.tos_key else asset.tos_url
 
 
 # ---------- 资产组 ----------
@@ -82,7 +88,7 @@ def list_assets(group_id: int) -> list[dict]:
             {
                 "id": a.id,
                 "type": a.type,
-                "tos_url": a.tos_url,
+                "tos_url": _asset_url(a),
                 "tos_key": a.tos_key,
                 "filename": a.filename,
                 "size_bytes": a.size_bytes,
@@ -143,7 +149,30 @@ def list_image_assets_for_reference(limit: int = 200) -> list[dict]:
             .order_by(Asset.created_at.desc())
             .limit(limit)
         ).all()
-        return [{"id": a.id, "tos_url": a.tos_url, "filename": a.filename, "group_id": a.group_id} for a in rows]
+        return [{"id": a.id, "tos_url": _asset_url(a), "filename": a.filename, "group_id": a.group_id} for a in rows]
+
+
+def list_assets_by_ids(asset_ids: list[int]) -> list[dict]:
+    """按 ID 返回已审核通过的素材，供创作场引用。"""
+    clean_ids = list(dict.fromkeys(int(i) for i in asset_ids if int(i) > 0))
+    if not clean_ids:
+        return []
+    with get_session() as session:
+        rows = session.scalars(
+            select(Asset)
+            .where(Asset.id.in_(clean_ids), Asset.review_status == "approved")
+            .order_by(Asset.created_at.desc())
+        ).all()
+        return [
+            {
+                "id": a.id,
+                "type": a.type,
+                "tos_url": _asset_url(a),
+                "filename": a.filename,
+                "group_id": a.group_id,
+            }
+            for a in rows
+        ]
 
 
 def list_assets_by_status(status: str, limit: int = 200) -> list[dict]:
@@ -158,12 +187,21 @@ def list_assets_by_status(status: str, limit: int = 200) -> list[dict]:
         return [
             {
                 "id": a.id, "group_id": a.group_id, "type": a.type,
-                "tos_url": a.tos_url, "filename": a.filename,
+                "tos_url": _asset_url(a), "filename": a.filename,
                 "review_status": a.review_status,
                 "created_at": a.created_at.strftime("%Y-%m-%d %H:%M"),
             }
             for a in rows
         ]
+
+
+def count_assets_by_status(status: str, asset_type: str | None = None) -> int:
+    """统计某审核状态的素材数，用于页面提示。"""
+    with get_session() as session:
+        stmt = select(func.count(Asset.id)).where(Asset.review_status == status)
+        if asset_type:
+            stmt = stmt.where(Asset.type == asset_type)
+        return int(session.scalar(stmt) or 0)
 
 
 def set_review_status(asset_id: int, status: str) -> None:

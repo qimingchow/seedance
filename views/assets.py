@@ -43,7 +43,7 @@ with st.sidebar:
         "· 多用户共享同一缓存\n\n"
         "· 每页 20 个素材"
     )
-    if st.button("🔄 刷新所有资产缓存", use_container_width=True):
+    if st.button("🔄 刷新所有资产缓存", width="stretch"):
         st.cache_data.clear()
         st.rerun()
     if not tos_client.is_configured():
@@ -51,6 +51,13 @@ with st.sidebar:
 
 # ---------------- 页头 + 新建组 ----------------
 st.title("🖼️ 私域资产库全览")
+notice = st.session_state.pop("asset_notice", None)
+if notice:
+    level, message = notice
+    if level == "success":
+        st.success(message)
+    else:
+        st.warning(message)
 groups = cached_groups()
 st.write(f"当前共 **{len(groups)}** 个资产组，展开后点「加载素材」按需拉取。")
 st.caption("💡 素材主要通过「人脸素材提交」上传入库（模块 3）。下面也可手动登记 TOS 地址用于测试。")
@@ -59,11 +66,19 @@ with st.expander("➕ 新建资产组"):
     c1, c2 = st.columns([2, 3])
     g_name = c1.text_input("资产组名称", key="new_group_name")
     g_desc = c2.text_input("描述（可选）", key="new_group_desc")
-    if st.button("创建资产组", type="primary"):
+    clean_group_name = g_name.strip()
+    existing_group_names = {g["name"] for g in groups}
+    group_already_exists = bool(clean_group_name and clean_group_name in existing_group_names)
+    if group_already_exists:
+        st.info(f"资产组「{clean_group_name}」已存在。")
+    if st.button("创建资产组", type="primary", disabled=not clean_group_name or group_already_exists):
         try:
-            asset_store.create_group(g_name, g_desc)
+            group_id = asset_store.create_group(clean_group_name, g_desc)
             _bust_cache()
-            st.success(f"已创建资产组「{g_name.strip()}」")
+            st.session_state["asset_notice"] = (
+                "success",
+                f"已创建资产组 #{group_id}：{clean_group_name}",
+            )
             st.rerun()
         except asset_store.AssetError as e:
             st.error(str(e))
@@ -129,18 +144,30 @@ for g in shown_groups:
                 for i, a in enumerate(page_assets):
                     with cols[i % 4]:
                         if a["type"] == "image":
-                            st.image(a["tos_url"], use_container_width=True)
+                            st.image(a["tos_url"], width="stretch")
                         else:
                             st.video(a["tos_url"])
                         badge = {"approved": "✅", "pending": "⏳", "rejected": "❌"}.get(
                             a["review_status"], ""
                         )
-                        st.caption(f"{badge} {a['filename'] or a['type']}")
+                        status_text = {
+                            "approved": "已批准",
+                            "pending": "待审核",
+                            "rejected": "已驳回",
+                        }.get(a["review_status"], a["review_status"])
+                        st.caption(f"{badge} #{a['id']} · {status_text} · {a['filename'] or a['type']}")
+                        st.markdown(f"[打开原文件]({a['tos_url']})")
                         if a["type"] == "image":
-                            if st.button("🎬 用作首帧", key=f"ref_{a['id']}", use_container_width=True):
+                            approved = a["review_status"] == "approved"
+                            if st.button(
+                                "🎬 用作首帧" if approved else "待审核，批准后可用",
+                                key=f"ref_{a['id']}",
+                                width="stretch",
+                                disabled=not approved,
+                            ):
                                 st.session_state["ref_image_url"] = a["tos_url"]
                                 st.switch_page("views/studio.py")
-                        if st.button("🗑️ 删除", key=f"dela_{a['id']}", use_container_width=True):
+                        if st.button("🗑️ 删除", key=f"dela_{a['id']}", width="stretch"):
                             try:
                                 key = asset_store.delete_asset(a["id"])
                                 tos_client.delete_object(key)

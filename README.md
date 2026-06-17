@@ -12,8 +12,10 @@
 - **登录 + 角色**：管理员（admin）/ 成员（member）
 - **管理后台**（仅管理员可见）
   - 新增成员、设初始密码
+  - 停用 / 启用成员、重置成员密码
   - 给成员**分配 / 追加 / 重设** token 额度
-  - **用量统计**：各成员已用额度、生成数、累计费用 + 柱状图
+  - **用量统计**：各成员已用额度、生成数、累计费用 + 柱状图 + CSV 导出
+  - **额度流水**：分配、预占、释放、消耗全链路记录，可导出 CSV
   - **内容审核**：按成员查看创作记录与视频
 - **成员侧**：登录后在侧边栏看到自己的剩余额度进度条
 - **数据库**：`users` / `generations` / `quota_transactions`（额度变动全程留痕）
@@ -26,12 +28,13 @@
 
 **模块 1 创作场**（直连火山方舟官方接口）：
 
-- 视频剧本 Prompt + 参数（模型档位、宽高比、分辨率、时长、智能时长、帧率、Seed、固定镜头）
-- 文生视频 / 图生视频（填首帧图 URL 即走 i2v）
+- 视频剧本 Prompt + 参数（模型档位、宽高比、分辨率、时长、智能时长、Seed）
+- 文生视频 / 多模态参考生视频（图片、视频、音频 URL / 上传素材 / Asset ID）
+- 同步生成音频、水印、首尾帧模式等开关；尾帧/联网搜索字段需按真实 API 响应继续校准
 - 调用 `POST /contents/generations/tasks` 创建任务，轮询 `GET .../tasks/{id}` 拿结果
-- 实时进度（`st.status`），完成后展示视频
+- 后台任务队列执行，页面不阻塞；完成后展示视频、音频、尾帧（若接口返回）
 - **生成前额度硬预检**：剩余额度不够本次预估则直接拦截
-- 完成后按**接口返回的实际计费 token** 扣减额度、写入历史
+- 提交时预占预估 token，完成后按**接口返回的实际计费 token** 结算，失败自动释放预占
 - 搜索历史（提示词/任务 ID/日期）+ 创作灵感库（一键复用提示词）
 
 **硬约束额度**（生产级）：
@@ -41,9 +44,15 @@
 - **本地账本为实时闸门**：火山大模型是后付费、按小时结算，没有可实时调用的“硬剩余”，
   billing API 有延迟，**绝不能**放在每次生成的关键路径上。本应用作为账号唯一消费方，
   本地累计消耗即等同账号真实消耗；账号总额作为分配与消耗的硬基准。
+- **预估更保守**：`TOKEN_ESTIMATE_SAFETY_MULTIPLIER` 默认 1.10；含参考视频时会按“每条参考视频≈输出时长”
+  额外预占输入视频 token，最终仍按 Ark 返回的 `usage.total_tokens` 结算。
 
-> 需要在 `.env` 配置 `ARK_API_KEY` 与两个模型档位 ID（`SEEDANCE_MODEL_PRO` / `SEEDANCE_MODEL_FAST`）才能真实生成。
-> 计费换算 `TOKEN_UNIT_PRICE_YUAN` 按你的火山实际定价填写。`pricing.py` 里的预估公式请按实际计费校准。
+> 需要在 `.env` 配置 `ARK_API_KEY` 与 TOS 信息才能真实生成和上传素材；不要把 `.env` 提交到 Git。
+> 默认使用 `doubao-seedance-2-0-260128`（Doubao-Seedance-2.0）。
+> `doubao-seedance-2-0-fast-260128` 只有开通 fast 资源包后再把 `SEEDANCE_ENABLE_FAST=true` 打开，避免误走余额计费。
+> 计费换算可配置 `TOKEN_UNIT_PRICE_WITH_VIDEO_YUAN` / `TOKEN_UNIT_PRICE_NO_VIDEO_YUAN`；
+> `TOKEN_ESTIMATE_SAFETY_MULTIPLIER` 可按真实账单继续校准。
+> 资源包总额默认是 `0`，必须在「管理后台 → 成员与额度 → 设置资源包额度基准」填入真实 token 后，才能安全分配和生成。
 
 ---
 
@@ -84,6 +93,29 @@
 
 ---
 
+## 第五步：部署与运维收尾（当前已完成）
+
+- **Ark 错误提示**：账号欠费、Safe Experience Mode / 限额、鉴权失败、参数错误会转成可读提示。
+- **安全重试**：查询任务（GET）对 429 / 5xx / 网络抖动做有限重试；创建任务（POST）不自动重试，避免重复生成和重复扣费。
+- **轮转日志**：默认写入 `logs/seedance.log`，记录任务提交、Ark task_id、成功/失败、TOS 转存等事件。
+- **后台运维页**：管理员可查看 TOS 配置状态、账号剩余额度、最近日志，并下载日志。
+- **TOS 连通性小样**：`scripts/tos_smoke.py --run` 会上传并删除一个临时对象。
+- **Docker 健康检查**：镜像内置 Streamlit healthcheck，便于部署平台判断服务状态。
+
+### TOS 访问模式
+
+资产库和创作场默认使用 `TOS_URL_MODE=public`，也就是直接访问
+`https://<bucket>.<endpoint>/<key>`。如果「打开原文件」显示 `403 AccessDenied`，
+说明匿名公共读还没有真正对对象生效。可以任选一种处理方式：
+
+- 在火山 TOS 控制台确认桶公共读/桶策略允许匿名 `GetObject`，并关闭阻止公共访问类开关。
+- 在 `.env` 设置 `TOS_UPLOAD_ACL=public-read`，让后续新上传对象显式公共读。
+- 更稳妥：设置 `TOS_URL_MODE=signed`，系统会基于 `tos_key` 动态生成临时签名 URL，旧素材无需重新上传。
+
+修改 `.env` 后需要重启 Streamlit。
+
+---
+
 ## 安装与运行
 
 ```bash
@@ -96,6 +128,8 @@ cp .env.example .env
 
 # 3. 创建第一个管理员（如 冯宇轩）
 python seed_admin.py
+# 也可非交互创建：
+# ADMIN_USERNAME=admin ADMIN_PASSWORD='强密码' python seed_admin.py
 
 # 4. 启动
 streamlit run app.py
@@ -103,6 +137,81 @@ streamlit run app.py
 
 用管理员登录后，进入「管理后台 → 成员与额度」即可创建成员并分配额度。
 用成员账号登录，则只能看到「创作场 / 资产库 / 人脸素材提交」三个页面和自己的额度。
+
+首次进入后台，请先设置资源包额度基准：
+
+1. 打开火山控制台，进入「费用中心 / 资源包」或「火山方舟 / 用量统计」查看 Doubao-Seedance-2.0 资源包 token 总量与已用量。
+2. 在本系统「管理后台 → 成员与额度 → 设置资源包额度基准」填写：
+   - 资源包 token 总额：购买/开通的 Seedance 2.0 资源包总 tokens
+   - 期初/外部已消耗 tokens：在本系统接管之前已经消耗的 tokens
+3. 系统会用「资源包总额 - 期初/外部已消耗 - 本地已消耗 - 运行中预占」作为账号可用额度。
+
+额度账本采用两阶段扣减：
+
+- 提交前按参数做保守估算并预占额度，避免并发任务把成员额度或账号额度提交超。
+- 任务成功后只按火山返回的 `usage.total_tokens` 结算真实消耗，预估值不会作为最终扣减值。
+- 如果真实消耗高于预占，系统仍按真实 tokens 入账，并在流水/后台标记“超预占/成员超额”，后续提交会被额度闸门拦住。
+- 如果任务已经提交到 Ark，但本地查询超时、查询失败，或成功响应缺少 `usage.total_tokens`，系统不会释放预占，会进入 `needs_settlement`，管理员需用 Task ID 到火山确认真实 tokens 后人工结算；确认未计费时再释放预占。
+- 本地账本只能自动覆盖本系统发起的任务。任何绕过本系统直接调用火山的消耗，需要及时更新“期初/外部已消耗 tokens”，否则本地剩余额度会高于火山真实剩余额度。
+
+### 配置与小样测试
+
+```bash
+# 检查配置是否完整（不会打印密钥）
+python scripts/check_config.py
+
+# 只打印最小化请求 payload 和预估成本，不调用火山
+python scripts/seedance_smoke.py
+
+# 确认要消耗额度时再真实提交；--poll 会轮询到终态并打印原始响应
+python scripts/seedance_smoke.py --run --poll
+
+# 检查 TOS；--run 会真实上传并删除一个 smoke/*.txt 临时对象
+python scripts/tos_smoke.py --run
+
+# 查看本地额度账本摘要
+python scripts/quota_audit.py
+
+# 从命令行设置资源包额度基准
+python scripts/set_account_baseline.py --total <资源包总tokens> --external-used <已消耗tokens>
+
+# 已有 task_id 时查询状态和解析结果
+python scripts/inspect_task.py <task_id> --raw
+
+# 手动把已成功任务的输出转存到自己的 TOS
+python scripts/mirror_task_outputs.py <task_id>
+```
+
+当前本机验证结果：
+
+- 配置检查通过：Ark API Key、Seedance 模型 ID、TOS Bucket 均已读取。
+- TOS 小样通过：成功上传并删除临时对象。
+- 默认模型已切到 `pro`：`python scripts/seedance_smoke.py` 会使用 `doubao-seedance-2-0-260128`。
+- `fast` 默认禁用：`python scripts/seedance_smoke.py --model fast` 会在本地拦截，不会提交到 Ark。
+- 已用 `pro` 模型真实小样跑通：任务 `cgt-20260613120138-f8jgg`，实际消耗 `40,594` tokens，
+  输出视频字段为 `content.video_url`。
+- 后台队列闭环已跑通：创建 Generation → Ark 任务 → 轮询成功 → 转存到自有 TOS → 按实际 token 结算。
+- 4 秒 480p 预估为 `42,224` tokens，实际为 `40,594` tokens，安全系数覆盖正常。
+
+如果小样返回 `SetLimitExceeded`，并提示 “Safe Experience Mode”，说明账号在该模型上触发了火山方舟的安全体验限额，
+需要到火山方舟控制台的模型开通/模型详情页调整或关闭 Safe Experience Mode 后再测试。
+
+成功响应解析已用真实 `pro` 小样确认：
+
+- 输出视频：`content.video_url`
+- 实际 token：`usage.total_tokens`
+- 辅助字段：`seed`、`resolution`、`ratio`、`duration`、`framespersecond`
+- 输出 URL 是带有效期的 TOS 签名 URL；后台任务成功后会尽量转存到自己的 TOS 桶，转存失败则保留 Ark 原始 URL。
+
+### Docker 部署
+
+```bash
+docker compose up -d --build
+```
+
+`docker-compose.yml` 默认使用 PostgreSQL，并通过 `.env` 读取 Ark / TOS 配置。
+生产环境必须在 `.env` 设置 `POSTGRES_PASSWORD`，并把域名、HTTPS、访问控制改成正式配置。
+注意：`docker compose config` 会展开 `.env` 中的密钥，只能在本机排查时使用，不要把输出粘到群里或工单里。
 
 ---
 
@@ -117,8 +226,10 @@ seedance-studio/
 ├── auth.py           # 密码哈希、登录、权限守卫
 ├── quota.py          # 额度分配 / 调整 / 校验 / 消耗 / 统计
 ├── seed_admin.py     # 创建首个管理员
+├── task_runner.py    # 后台任务队列 / 轮询 / 结算
 ├── requirements.txt
 ├── .env.example
+├── scripts/          # 配置检查 / 小样测试 / 任务查询
 └── views/
     ├── admin.py      # 管理后台（成员/额度/用量/审核）
     ├── studio.py     # 模块 1 创作场（第二步实现）
@@ -136,7 +247,7 @@ seedance-studio/
 | 第二步 | 模块 1 创作场 + 硬约束额度 | ✅ 已完成 |
 | 第三步 | 模块 2 私域资产库（浏览/缓存/分页/管理/引用） | ✅ 已完成 |
 | 第四步 | 模块 3 人脸素材入库（校验/TOS 上传/审核/资产组） | ✅ 已完成 |
-| 第五步 | 部署优化：错误重试、日志监控、Docker、上线 | 待开发 |
+| 第五步 | 部署优化：错误提示、安全重试、日志、TOS 小样、Docker 健康检查 | ✅ 已完成 |
 
 ---
 

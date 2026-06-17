@@ -37,7 +37,7 @@ def _login_form() -> None:
     with st.form("login_form"):
         username = st.text_input("用户名")
         password = st.text_input("密码", type="password")
-        submitted = st.form_submit_button("登录", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("登录", type="primary", width="stretch")
     if submitted:
         user = _authenticate(username.strip(), password)
         if user:
@@ -52,6 +52,13 @@ def _login_form() -> None:
 def require_login() -> None:
     """未登录则显示登录表单并中断后续渲染。"""
     if "user_id" not in st.session_state:
+        _login_form()
+        st.stop()
+    user = current_user()
+    if not user or user.status != "active":
+        for key in ("user_id", "username", "role"):
+            st.session_state.pop(key, None)
+        st.warning("账号不存在或已被停用，请重新登录。")
         _login_form()
         st.stop()
 
