@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -20,9 +21,25 @@ def _mask(value: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
+def _mask_url(value: str) -> str:
+    if not value:
+        return "未配置"
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return _mask(value)
+    if not parts.password:
+        return value
+    username = parts.username or ""
+    host = parts.hostname or ""
+    port = f":{parts.port}" if parts.port else ""
+    netloc = f"{username}:***@{host}{port}" if username else f"***@{host}{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
 def main() -> None:
     init_db()
-    print("DATABASE_URL:", settings.DATABASE_URL)
+    print("DATABASE_URL:", _mask_url(settings.DATABASE_URL))
     print("ACCOUNT_TOTAL_TOKENS:", settings.ACCOUNT_TOTAL_TOKENS)
     print("ACCOUNT_EXTERNAL_USED_TOKENS:", settings.ACCOUNT_EXTERNAL_USED_TOKENS)
     print("ARK_API_KEY:", _mask(settings.ARK_API_KEY))
