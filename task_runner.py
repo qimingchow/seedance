@@ -29,37 +29,55 @@ def _has_video_input(payload: dict) -> bool:
     return any(item.get("type") == "video_url" for item in payload.get("content", []))
 
 
-def _mirror_outputs(generation_id: int, parsed: dict) -> tuple[str, str, str]:
+def _mirror_outputs(generation_id: int, parsed: dict) -> dict[str, str]:
     """把 Ark 签名输出转存到自己的 TOS。失败时保留原 URL。"""
-    video_url = parsed["video_url"]
-    audio_url = parsed["audio_url"]
-    last_frame_url = parsed["last_frame_url"]
+    output = {
+        "video_url": parsed["video_url"],
+        "audio_url": parsed["audio_url"],
+        "last_frame_url": parsed["last_frame_url"],
+        "video_tos_key": "",
+        "audio_tos_key": "",
+        "last_frame_tos_key": "",
+    }
     if not tos_client.is_configured():
-        return video_url, audio_url, last_frame_url
+        return output
 
     try:
-        if video_url:
-            video_url = tos_client.mirror_url(
-                f"outputs/{generation_id}/video.mp4",
-                video_url,
+        if output["video_url"]:
+            key = f"outputs/{generation_id}/video.mp4"
+            output["video_url"] = tos_client.mirror_url(
+                key,
+                output["video_url"],
                 content_type="video/mp4",
             )
-        if audio_url:
-            audio_url = tos_client.mirror_url(
-                f"outputs/{generation_id}/audio.mp3",
-                audio_url,
+            output["video_tos_key"] = key
+        if output["audio_url"]:
+            key = f"outputs/{generation_id}/audio.mp3"
+            output["audio_url"] = tos_client.mirror_url(
+                key,
+                output["audio_url"],
                 content_type="audio/mpeg",
             )
-        if last_frame_url:
-            last_frame_url = tos_client.mirror_url(
-                f"outputs/{generation_id}/last_frame.jpg",
-                last_frame_url,
+            output["audio_tos_key"] = key
+        if output["last_frame_url"]:
+            key = f"outputs/{generation_id}/last_frame.jpg"
+            output["last_frame_url"] = tos_client.mirror_url(
+                key,
+                output["last_frame_url"],
                 content_type="image/jpeg",
             )
+            output["last_frame_tos_key"] = key
     except Exception as exc:
         logger.warning("generation %s mirror outputs failed: %s", generation_id, exc)
-        return parsed["video_url"], parsed["audio_url"], parsed["last_frame_url"]
-    return video_url, audio_url, last_frame_url
+        return {
+            "video_url": parsed["video_url"],
+            "audio_url": parsed["audio_url"],
+            "last_frame_url": parsed["last_frame_url"],
+            "video_tos_key": "",
+            "audio_tos_key": "",
+            "last_frame_tos_key": "",
+        }
+    return output
 
 
 def submit_generation(generation_id: int) -> None:
@@ -198,16 +216,19 @@ def _run_generation(generation_id: int) -> None:
                     "请管理员用 Task ID 在火山控制台/API 查询真实 tokens 后人工处理。"
                 )
                 logger.error("generation %s missing usage.total_tokens task=%s", generation_id, task_id)
-                video_url, audio_url, last_frame_url = _mirror_outputs(generation_id, parsed)
+                output = _mirror_outputs(generation_id, parsed)
                 _set_needs_settlement(generation_id, message, final_response)
                 with get_session() as session:
                     gen = session.get(Generation, generation_id)
                     if gen:
-                        gen.video_url = video_url
-                        gen.audio_url = audio_url
-                        gen.last_frame_url = last_frame_url
+                        gen.video_url = output["video_url"]
+                        gen.audio_url = output["audio_url"]
+                        gen.last_frame_url = output["last_frame_url"]
+                        gen.video_tos_key = output["video_tos_key"]
+                        gen.audio_tos_key = output["audio_tos_key"]
+                        gen.last_frame_tos_key = output["last_frame_tos_key"]
                 return
-            video_url, audio_url, last_frame_url = _mirror_outputs(generation_id, parsed)
+            output = _mirror_outputs(generation_id, parsed)
             with get_session() as session:
                 gen = session.get(Generation, generation_id)
                 if gen:
@@ -219,9 +240,12 @@ def _run_generation(generation_id: int) -> None:
                         note=f"生成 #{generation_id} ({task_id})",
                     )
                     gen.status = "succeeded"
-                    gen.video_url = video_url
-                    gen.audio_url = audio_url
-                    gen.last_frame_url = last_frame_url
+                    gen.video_url = output["video_url"]
+                    gen.audio_url = output["audio_url"]
+                    gen.last_frame_url = output["last_frame_url"]
+                    gen.video_tos_key = output["video_tos_key"]
+                    gen.audio_tos_key = output["audio_tos_key"]
+                    gen.last_frame_tos_key = output["last_frame_tos_key"]
                     gen.tokens_used = billed
                     gen.cost_yuan = pricing.tokens_to_yuan(
                         billed, has_video_input=has_video_input

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import requests
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from config import settings
 from ops import get_logger
@@ -85,6 +85,28 @@ def access_url(key: str) -> str:
     if settings.TOS_URL_MODE == "signed":
         return signed_url(key)
     return public_url(key)
+
+
+def object_key_from_url(url: str) -> str:
+    """从本桶公开 URL 中还原对象 key；非本桶 URL 返回空字符串。"""
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    expected_host = f"{settings.TOS_BUCKET}.{settings.TOS_ENDPOINT}"
+    if parts.netloc != expected_host:
+        return ""
+    return unquote(parts.path.lstrip("/"))
+
+
+def access_url_for_stored_url(url: str, key: str = "") -> str:
+    """把数据库里保存的 TOS URL/key 转为当前配置下可访问的 URL。"""
+    object_key = key or object_key_from_url(url)
+    if object_key:
+        return access_url(object_key)
+    return url
 
 
 def upload_bytes(key: str, data: bytes, content_type: str | None = None) -> str:

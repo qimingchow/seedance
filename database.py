@@ -42,6 +42,9 @@ def _migrate_missing_columns() -> None:
         "generations": {
             "audio_url": "TEXT DEFAULT '' NOT NULL",
             "last_frame_url": "TEXT DEFAULT '' NOT NULL",
+            "video_tos_key": "VARCHAR(512) DEFAULT '' NOT NULL",
+            "audio_tos_key": "VARCHAR(512) DEFAULT '' NOT NULL",
+            "last_frame_tos_key": "VARCHAR(512) DEFAULT '' NOT NULL",
             "request_json": "TEXT DEFAULT '{}' NOT NULL",
             "response_json": "TEXT DEFAULT '{}' NOT NULL",
             "error_message": "TEXT DEFAULT '' NOT NULL",

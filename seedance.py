@@ -161,6 +161,11 @@ def _error_hint(code: str, message: str) -> str:
         "InvalidAuthenticationToken": "请检查 ARK_API_KEY 是否来自当前账号、是否完整、是否仍有效。",
         "AccessDenied": "当前 API Key 或账号没有该模型/地域的调用权限，请在火山方舟开通管理中确认。",
         "InvalidParameter": "请求参数不被 Ark 接受，请对照火山方舟 API Explorer 校准字段。",
+        "InputImageSensitiveContentDetected.PrivacyInformation": (
+            "输入图片被火山内容审核判定可能包含真实人物或隐私信息，任务在创建前被拦截。"
+            "请换用不含真人脸/真实身份信息的参考图，或到火山方舟确认该类真人参考素材的合规能力与开通范围。"
+            "该错误发生在创建任务阶段，通常不会产生模型 token 消耗。"
+        ),
     }
     if code in hints:
         return hints[code]
@@ -168,7 +173,18 @@ def _error_hint(code: str, message: str) -> str:
         return hints["AccountOverdueError"]
     if "safe experience mode" in lower or "limit" in lower:
         return hints["SetLimitExceeded"]
+    if "real person" in lower or "privacy" in lower:
+        return hints["InputImageSensitiveContentDetected.PrivacyInformation"]
     return ""
+
+
+def error_hint_from_text(message: str) -> str:
+    """从已保存的错误文本中提取处理建议，用于历史记录展示。"""
+    if not message:
+        return ""
+    match = re.search(r"\[([A-Za-z0-9_.-]+)\]", message)
+    code = match.group(1) if match else ""
+    return _error_hint(code, message)
 
 
 def _format_http_error(action: str, status_code: int, text: str) -> SeedanceError:

@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 import asset_store
 import pricing
+import seedance
 import tos_client
 from auth import hash_password, require_admin
 from config import settings
@@ -445,9 +446,15 @@ with tab_review:
                 "token_delta": g.tokens_used - g.estimated_tokens if g.tokens_used else 0,
                 "cost": g.cost_yuan,
                 "time": g.created_at.strftime("%Y-%m-%d %H:%M"),
-                "video_url": g.video_url,
-                "audio_url": g.audio_url,
-                "last_frame_url": g.last_frame_url,
+                "video_url": tos_client.access_url_for_stored_url(
+                    g.video_url, g.video_tos_key
+                ),
+                "audio_url": tos_client.access_url_for_stored_url(
+                    g.audio_url, g.audio_tos_key
+                ),
+                "last_frame_url": tos_client.access_url_for_stored_url(
+                    g.last_frame_url, g.last_frame_tos_key
+                ),
                 "error_message": g.error_message,
                 "task_id": g.task_id,
                 "request_json": g.request_json,
@@ -538,6 +545,9 @@ with tab_review:
                 st.image(rec["last_frame_url"], caption="尾帧", width="stretch")
             if rec["status"] == "failed" and rec["error_message"]:
                 st.error(rec["error_message"])
+                hint = seedance.error_hint_from_text(rec["error_message"])
+                if hint:
+                    st.info(f"处理建议：{hint}")
             with st.expander("请求 / 响应 JSON"):
                 st.code(rec["request_json"] or "{}", language="json")
                 st.code(rec["response_json"] or "{}", language="json")

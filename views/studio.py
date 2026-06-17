@@ -425,9 +425,15 @@ with get_session() as s:
             "tokens": g.tokens_used,
             "cost": g.cost_yuan,
             "task_id": g.task_id,
-            "video_url": g.video_url,
-            "audio_url": g.audio_url,
-            "last_frame_url": g.last_frame_url,
+            "video_url": tos_client.access_url_for_stored_url(
+                g.video_url, g.video_tos_key
+            ),
+            "audio_url": tos_client.access_url_for_stored_url(
+                g.audio_url, g.audio_tos_key
+            ),
+            "last_frame_url": tos_client.access_url_for_stored_url(
+                g.last_frame_url, g.last_frame_tos_key
+            ),
             "error_message": g.error_message,
             "reserved_tokens": g.reserved_tokens,
             "time": g.created_at.strftime("%Y-%m-%d %H:%M"),
@@ -460,6 +466,9 @@ else:
                     st.caption(f"⏳ 运行中 · 预占 {r['reserved_tokens']:,} tokens")
                 elif r["status"] == "failed" and r["error_message"]:
                     st.caption(f"失败原因：{r['error_message'][:80]}")
+                    hint = seedance.error_hint_from_text(r["error_message"])
+                    if hint:
+                        st.caption(f"处理建议：{hint[:120]}")
                 st.write(r["prompt"][:80] + ("…" if len(r["prompt"]) > 80 else ""))
                 if r["video_url"]:
                     st.video(r["video_url"])
