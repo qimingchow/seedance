@@ -55,6 +55,25 @@ def _append_state_url(key: str, url: str) -> None:
     st.session_state[key] = "\n".join(current)
 
 
+def _queue_state_url(key: str, url: str) -> None:
+    pending_key = f"_pending_{key}"
+    pending = st.session_state.get(pending_key, [])
+    if isinstance(pending, str):
+        pending = [pending]
+    if url and url not in pending:
+        pending.append(url)
+    st.session_state[pending_key] = pending
+
+
+def _consume_queued_state_urls(key: str) -> None:
+    pending_key = f"_pending_{key}"
+    pending = st.session_state.pop(pending_key, [])
+    if isinstance(pending, str):
+        pending = [pending]
+    for url in pending:
+        _append_state_url(key, url)
+
+
 def _upload_files(files, *, folder: str) -> list[str]:
     if not files:
         return []
@@ -80,8 +99,9 @@ def _upload_files(files, *, folder: str) -> list[str]:
 
 
 if st.session_state.get("ref_image_url"):
-    _append_state_url("reference_image_urls", st.session_state["ref_image_url"])
+    _queue_state_url("reference_image_urls", st.session_state["ref_image_url"])
     st.session_state.pop("ref_image_url", None)
+_consume_queued_state_urls("reference_image_urls")
 
 st.title("🎬 Seedance Studio 创作场")
 
@@ -177,7 +197,7 @@ with st.expander("🖼️ 快速访问私域资产库"):
         labels = {f"#{r['id']} {r['filename'] or '(无名)'}": r["tos_url"] for r in ref_imgs}
         pick = st.selectbox("选择已审核通过的图片素材", ["（不选）"] + list(labels.keys()))
         if pick != "（不选）" and st.button("加入参考图"):
-            _append_state_url("reference_image_urls", labels[pick])
+            _queue_state_url("reference_image_urls", labels[pick])
             st.rerun()
     else:
         pending_images = asset_store.count_assets_by_status("pending", asset_type="image")
