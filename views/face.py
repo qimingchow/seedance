@@ -17,7 +17,9 @@ from auth import current_user
 MAX_FILES = 50
 
 user = current_user()
-ark_ready = ark_assets.is_configured()
+ark_configured = ark_assets.is_configured()
+ark_capability_unavailable = bool(st.session_state.get("ark_asset_capability_unavailable"))
+ark_ready = ark_configured and not ark_capability_unavailable
 
 
 def _group_label(group: dict) -> str:
@@ -29,8 +31,20 @@ def _refresh_groups() -> list[dict]:
     return asset_store.list_groups_with_counts()
 
 
+def _switch_to_local_asset_mode(message: str) -> None:
+    st.session_state["ark_asset_capability_unavailable"] = True
+    st.session_state["face_notice"] = (
+        "warning",
+        f"{message} 已切换为本地 TOS 入库模式；如需 asset://AssetId，请先在火山方舟开通 AIGC 资产能力。",
+    )
+    st.rerun()
+
+
 st.title("👤 人脸素材入库系统")
-st.info("流程：选择文件 → 校验格式 → 上传到 TOS → 注册火山 Ark 资产 → Active 后入库资产组", icon="🧭")
+if ark_ready:
+    st.info("流程：选择文件 → 校验格式 → 上传到 TOS → 注册火山 Ark 资产 → Active 后入库资产组", icon="🧭")
+else:
+    st.info("流程：选择文件 → 校验格式 → 上传到 TOS → 本地入库 → 管理员审核后可在创作场引用", icon="🧭")
 notice = st.session_state.pop("face_notice", None)
 if notice:
     level, message = notice
@@ -52,11 +66,16 @@ with st.sidebar:
     )
     st.markdown("### 连接状态")
     st.caption(f"TOS：{'可用' if tos_client.is_configured() else '未配置'}")
-    st.caption(f"Ark 资产 OpenAPI：{'可用' if ark_ready else '未配置或未启用'}")
+    st.caption(f"Ark 资产 OpenAPI：{'可用' if ark_ready else '未配置、未启用或账号未开通'}")
     if not tos_client.is_configured():
         st.warning("TOS 未配置：可校验文件，但无法上传入库。", icon="⚠️")
     if not ark_ready:
         st.info("Ark 资产 OpenAPI 未配置时，会保留原本的本地 pending 审核流程。", icon="ℹ️")
+    if ark_configured and ark_capability_unavailable:
+        st.warning("当前账号未开通 Ark AIGC 资产能力，本会话已切换成本地 TOS 入库模式。", icon="⚠️")
+        if st.button("重新尝试 Ark 资产同步", width="stretch"):
+            st.session_state.pop("ark_asset_capability_unavailable", None)
+            st.rerun()
 
 # ---- 第一步：选择文件 ----
 st.subheader("第一步：选择文件")
@@ -96,11 +115,18 @@ if ark_ready:
             )
             st.rerun()
         except ark_assets.ArkAssetError as exc:
+            if ark_assets.is_subscription_required(exc):
+                _switch_to_local_asset_mode(ark_assets.capability_hint(exc))
             st.error(f"同步资产组失败：{exc}")
+            hint = ark_assets.capability_hint(exc)
+            if hint:
+                st.info(hint)
 
 group_name_to_id = {g["name"]: g["id"] for g in groups}
 group_labels = {_group_label(g): g["id"] for g in groups}
-mode_options = ["从现有列表中选择", "手动输入 Ark GroupId", "创建新组"]
+mode_options = ["从现有列表中选择", "创建新组"]
+if ark_ready:
+    mode_options.insert(1, "手动输入 Ark GroupId")
 mode = st.radio("组操作", mode_options, horizontal=True)
 
 target_group_id = None
@@ -132,16 +158,31 @@ else:
     if group_already_exists:
         st.info(f"资产组「{clean_group_name}」已存在，可切换到「从现有列表中选择」使用。")
     if create_group_clicked:
+        group_id = None
         try:
             group_id = asset_store.create_group(clean_group_name, new_group_desc)
+        except asset_store.AssetError as e:
+            if ark_assets.is_subscription_required(e):
+                try:
+                    group_id = asset_store.create_group(
+                        clean_group_name,
+                        new_group_desc,
+                        sync_remote=False,
+                    )
+                except asset_store.AssetError as local_error:
+                    st.error(str(local_error))
+                    group_id = None
+                if group_id:
+                    _switch_to_local_asset_mode(ark_assets.capability_hint(e))
+            else:
+                st.error(str(e))
+        if group_id:
             st.session_state["face_notice"] = (
                 "success",
                 f"已创建资产组 #{group_id}：{clean_group_name}。",
             )
             st.cache_data.clear()
             st.rerun()
-        except asset_store.AssetError as e:
-            st.error(str(e))
     st.caption("也可以选择文件后直接点击下方批量提交，系统会自动创建该组并入库。")
 
 # ---- 提交 ----
@@ -162,7 +203,18 @@ if submit:
                 st.stop()
             target_group_id = group_name_to_id.get(clean_group_name)
             if target_group_id is None:
-                target_group_id = asset_store.create_group(clean_group_name, new_group_desc)
+                try:
+                    target_group_id = asset_store.create_group(clean_group_name, new_group_desc)
+                except asset_store.AssetError as e:
+                    if not ark_assets.is_subscription_required(e):
+                        raise
+                    target_group_id = asset_store.create_group(
+                        clean_group_name,
+                        new_group_desc,
+                        sync_remote=False,
+                    )
+                    st.session_state["ark_asset_capability_unavailable"] = True
+                    ark_ready = False
         elif mode == "手动输入 Ark GroupId":
             clean_ark_group_id = manual_ark_group_id.strip()
             if not clean_ark_group_id:
@@ -191,8 +243,17 @@ if submit:
     try:
         ark_group_id = asset_store.ensure_remote_group(target_group_id) if ark_ready else ""
     except asset_store.AssetError as e:
-        st.error(str(e))
-        st.stop()
+        if ark_assets.is_subscription_required(e):
+            st.session_state["ark_asset_capability_unavailable"] = True
+            ark_group_id = ""
+            st.warning(
+                "当前账号未开通 Ark AIGC 资产能力，本次提交将按本地 TOS 审核模式继续。",
+                icon="⚠️",
+            )
+            st.info(ark_assets.capability_hint(e))
+        else:
+            st.error(str(e))
+            st.stop()
 
     results = []
     bar = st.progress(0.0, text="开始处理…")
@@ -251,25 +312,51 @@ if submit:
                     )
                     results.append((f.name, "✅ 已入库", f"{msg}；审核状态：{status}"))
             except ark_assets.ArkAssetError as e:
-                asset_id = asset_store.add_asset(
-                    target_group_id,
-                    asset_type=kind or "image",
-                    tos_url=tos_client.access_url(key),
-                    tos_key=key,
-                    filename=f.name,
-                    size_bytes=len(data),
-                    review_status="rejected",
-                    ark_status="Failed",
-                    ark_error=str(e),
-                    uploaded_by=(user.id if user else None),
-                )
-                results.append((f.name, "❌ Ark 注册失败", f"本地记录 #{asset_id}；{e}"))
+                if ark_assets.is_subscription_required(e):
+                    st.session_state["ark_asset_capability_unavailable"] = True
+                    ark_group_id = ""
+                    status = review.submit_for_review(
+                        {"filename": f.name, "type": kind, "tos_url": url}
+                    )
+                    asset_id = asset_store.add_asset(
+                        target_group_id,
+                        asset_type=kind or "image",
+                        tos_url=url,
+                        tos_key=key,
+                        filename=f.name,
+                        size_bytes=len(data),
+                        review_status=status,
+                        ark_status="SubscriptionRequired",
+                        ark_error=str(e),
+                        uploaded_by=(user.id if user else None),
+                    )
+                    results.append(
+                        (
+                            f.name,
+                            "⚠️ 已转本地入库",
+                            f"本地素材 #{asset_id}；审核状态：{status}；Ark 资产能力未开通",
+                        )
+                    )
+                else:
+                    asset_id = asset_store.add_asset(
+                        target_group_id,
+                        asset_type=kind or "image",
+                        tos_url=tos_client.access_url(key),
+                        tos_key=key,
+                        filename=f.name,
+                        size_bytes=len(data),
+                        review_status="rejected",
+                        ark_status="Failed",
+                        ark_error=str(e),
+                        uploaded_by=(user.id if user else None),
+                    )
+                    results.append((f.name, "❌ Ark 注册失败", f"本地记录 #{asset_id}；{e}"))
             except Exception as e:
                 results.append((f.name, "❌ 上传失败", str(e)))
         bar.progress((i + 1) / len(files), text=f"已处理 {i + 1}/{len(files)}")
 
     st.subheader("提交结果")
-    ok_n = sum(1 for _, s, _ in results if s.startswith("✅"))
+    ok_n = sum(1 for _, s, _ in results if s.startswith("✅") or s.startswith("⚠️ 已转本地入库"))
     pending_n = sum(1 for _, _, detail in results if "审核状态：pending" in detail)
     if ok_n:
         st.cache_data.clear()

@@ -49,7 +49,14 @@ with st.sidebar:
         st.rerun()
     if not tos_client.is_configured():
         st.info("TOS 未配置：删除素材只移除记录，不会删 TOS 对象。", icon="ℹ️")
-    st.caption(f"Ark 资产 OpenAPI：{'可用' if ark_assets.is_configured() else '未配置或未启用'}")
+    ark_capability_unavailable = bool(st.session_state.get("ark_asset_capability_unavailable"))
+    ark_ready = ark_assets.is_configured() and not ark_capability_unavailable
+    st.caption(f"Ark 资产 OpenAPI：{'可用' if ark_ready else '未配置、未启用或账号未开通'}")
+    if ark_assets.is_configured() and ark_capability_unavailable:
+        st.warning("当前账号未开通 Ark AIGC 资产能力，资产库会使用本地 TOS 记录。", icon="⚠️")
+        if st.button("重新尝试 Ark 资产同步", width="stretch"):
+            st.session_state.pop("ark_asset_capability_unavailable", None)
+            st.rerun()
 
 # ---------------- 页头 + 新建组 ----------------
 st.title("🖼️ 私域资产库全览")
@@ -74,16 +81,36 @@ with st.expander("➕ 新建资产组"):
     if group_already_exists:
         st.info(f"资产组「{clean_group_name}」已存在。")
     if st.button("创建资产组", type="primary", disabled=not clean_group_name or group_already_exists):
+        group_id = None
         try:
             group_id = asset_store.create_group(clean_group_name, g_desc)
+        except asset_store.AssetError as e:
+            if ark_assets.is_subscription_required(e):
+                try:
+                    group_id = asset_store.create_group(
+                        clean_group_name,
+                        g_desc,
+                        sync_remote=False,
+                    )
+                except asset_store.AssetError as local_error:
+                    st.error(str(local_error))
+                else:
+                    st.session_state["ark_asset_capability_unavailable"] = True
+                    st.session_state["asset_notice"] = (
+                        "warning",
+                        f"已创建本地资产组 #{group_id}：{clean_group_name}。{ark_assets.capability_hint(e)}",
+                    )
+                    _bust_cache()
+                    st.rerun()
+            else:
+                st.error(str(e))
+        if group_id:
             _bust_cache()
             st.session_state["asset_notice"] = (
                 "success",
                 f"已创建资产组 #{group_id}：{clean_group_name}",
             )
             st.rerun()
-        except asset_store.AssetError as e:
-            st.error(str(e))
 
 # ---------------- 资产组分页 ----------------
 if not groups:
@@ -135,7 +162,7 @@ for g in shown_groups:
         if lc3.button(
             "同步火山素材",
             key=f"sync_remote_{gid}",
-            disabled=not (ark_assets.is_configured() and g.get("ark_group_id")),
+            disabled=not (ark_ready and g.get("ark_group_id")),
         ):
             try:
                 remote_assets = ark_assets.list_assets_in_group(g["ark_group_id"])
@@ -146,6 +173,9 @@ for g in shown_groups:
                 st.rerun()
             except (ark_assets.ArkAssetError, asset_store.AssetError) as e:
                 st.error(str(e))
+                if ark_assets.is_subscription_required(e):
+                    st.session_state["ark_asset_capability_unavailable"] = True
+                    st.info(ark_assets.capability_hint(e))
 
         if st.session_state.get(loaded_key):
             assets = cached_assets(gid)

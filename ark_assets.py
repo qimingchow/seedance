@@ -31,7 +31,36 @@ PATH = "/"
 
 
 class ArkAssetError(Exception):
-    pass
+    def __init__(self, message: str, *, code: str = "", status_code: int | None = None):
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+
+
+def is_subscription_required(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current)
+        if (
+            getattr(current, "code", "") == "SubscriptionRequired"
+            or "SubscriptionRequired" in message
+            or "AIGC asset capability is not available" in message
+        ):
+            return True
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+    return False
+
+
+def capability_hint(exc: BaseException | None = None) -> str:
+    if exc and is_subscription_required(exc):
+        return (
+            "当前火山账号/套餐未开通 Ark AIGC 资产能力，所以无法调用资产组和素材资产 OpenAPI。"
+            "需要在火山方舟开通该能力后，才能使用 asset://AssetId 方式引用真人素材。"
+            "未开通前可以把 ARK_ASSET_SYNC_ENABLED=false，先使用本地 TOS 入库和人工审核流程。"
+        )
+    return ""
 
 
 def _setting(name: str, default: Any = "") -> Any:
@@ -117,7 +146,7 @@ def _extract_nested(data: Any, *keys: str) -> str:
 
 def _request(action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if not is_configured():
-        raise ArkAssetError("Ark 资产 OpenAPI 未配置或未启用")
+        raise ArkAssetError("Ark 资产 OpenAPI 未配置或未启用", code="NotConfigured")
 
     body = json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":"))
     now = dt.datetime.utcnow()
@@ -210,7 +239,11 @@ def _request(action: str, payload: dict[str, Any] | None = None) -> dict[str, An
         prefix = f"{action} 失败（HTTP {response.status_code}）"
         if code:
             prefix += f" [{code}]"
-        raise ArkAssetError(f"{prefix}：{message}")
+        raise ArkAssetError(
+            f"{prefix}：{message}",
+            code=code,
+            status_code=response.status_code,
+        )
     if not isinstance(data, dict):
         raise ArkAssetError(f"{action} 返回非对象 JSON：{response.text[:500]}")
     return data
