@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import settings
 from database import init_db
+import ark_assets
 import tos_client
 import seedance
 
@@ -44,6 +45,10 @@ def main() -> None:
     print("ACCOUNT_EXTERNAL_USED_TOKENS:", settings.ACCOUNT_EXTERNAL_USED_TOKENS)
     print("ARK_API_KEY:", _mask(settings.ARK_API_KEY))
     print("ARK_BASE_URL:", settings.ARK_BASE_URL)
+    print("ARK_OPENAPI_ACCESS_KEY:", _mask(settings.ARK_OPENAPI_ACCESS_KEY))
+    print("ARK_OPENAPI_HOST:", settings.ARK_OPENAPI_HOST)
+    print("ARK_ASSET_SYNC_ENABLED:", settings.ARK_ASSET_SYNC_ENABLED)
+    print("ARK_ASSET_CONFIGURED:", ark_assets.is_configured())
     print("SEEDANCE_MODEL_PRO:", settings.SEEDANCE_MODEL_PRO)
     print("SEEDANCE_MODEL_FAST:", settings.SEEDANCE_MODEL_FAST)
     print("SEEDANCE_DEFAULT_MODEL_KEY:", settings.SEEDANCE_DEFAULT_MODEL_KEY)

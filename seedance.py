@@ -7,6 +7,7 @@
 
 Seedance 2.0 的多模态创作以顶层 JSON 参数 + content 数组提交：
   content: text + reference_image/reference_video/reference_audio
+  已入库 Ark 资产用 image_url.url = "asset://<AssetId>" 引用（对齐旧版工具）。
   generate_audio / ratio / duration / watermark 等参数放在顶层。
 """
 from __future__ import annotations

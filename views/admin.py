@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import select
 
+import ark_assets
 import asset_store
 import pricing
 import seedance
@@ -569,7 +570,14 @@ with tab_assets:
                         st.image(a["tos_url"], width="stretch")
                     else:
                         st.video(a["tos_url"])
-                    st.caption(f"#{a['id']} · {a['filename'] or a['type']} · {a['created_at']}")
+                    ark_text = f" · Ark {a['ark_asset_id']}" if a.get("ark_asset_id") else ""
+                    st.caption(
+                        f"#{a['id']}{ark_text} · {a['filename'] or a['type']} · {a['created_at']}"
+                    )
+                    if a.get("ark_status"):
+                        st.caption(f"Ark 状态：{a['ark_status']}")
+                    if a.get("ark_error"):
+                        st.caption(f"Ark 错误：{a['ark_error'][:100]}")
                     bc1, bc2 = st.columns(2)
                     if bc1.button("✅ 批准", key=f"appr_{a['id']}", width="stretch"):
                         asset_store.set_review_status(a["id"], "approved")
@@ -586,7 +594,9 @@ with tab_assets:
             st.caption("无")
         for a in rejected:
             rc1, rc2 = st.columns([4, 1])
-            rc1.write(f"#{a['id']} · {a['filename'] or a['type']} · {a['created_at']}")
+            ark_text = f" · Ark {a['ark_asset_id']}" if a.get("ark_asset_id") else ""
+            err_text = f" · {a['ark_error'][:100]}" if a.get("ark_error") else ""
+            rc1.write(f"#{a['id']}{ark_text} · {a['filename'] or a['type']} · {a['created_at']}{err_text}")
             if rc2.button("恢复待审", key=f"restore_{a['id']}"):
                 asset_store.set_review_status(a["id"], "pending")
                 st.cache_data.clear()
@@ -595,11 +605,12 @@ with tab_assets:
 # ---------- 5. 运维 ----------
 with tab_ops:
     st.subheader("运行状态")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("TOS 配置", "可用" if tos_client.is_configured() else "未配置")
-    c2.metric("账号可用 tokens", f"{account_remaining():,}")
-    c3.metric("运行中预占", f"{account_reserved_sum():,}")
-    c4.metric("TOS URL 模式", settings.TOS_URL_MODE or "public")
+    c2.metric("Ark 资产同步", "可用" if ark_assets.is_configured() else "未配置")
+    c3.metric("账号可用 tokens", f"{account_remaining():,}")
+    c4.metric("运行中预占", f"{account_reserved_sum():,}")
+    c5.metric("TOS URL 模式", settings.TOS_URL_MODE or "public")
 
     st.subheader("最近日志")
     log_path = "logs/seedance.log"

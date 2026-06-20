@@ -53,6 +53,15 @@ def _migrate_missing_columns() -> None:
             "started_at": "DATETIME",
             "finished_at": "DATETIME",
         },
+        "asset_groups": {
+            "ark_group_id": "VARCHAR(128) DEFAULT '' NOT NULL",
+        },
+        "assets": {
+            "ark_asset_id": "VARCHAR(128) DEFAULT '' NOT NULL",
+            "ark_status": "VARCHAR(32) DEFAULT '' NOT NULL",
+            "ark_url": "TEXT DEFAULT '' NOT NULL",
+            "ark_error": "TEXT DEFAULT '' NOT NULL",
+        },
     }
     with engine.begin() as conn:
         for table, columns in wanted.items():

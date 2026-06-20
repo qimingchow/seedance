@@ -104,6 +104,7 @@ class AssetGroup(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    ark_group_id: Mapped[str] = mapped_column(String(128), default="", index=True)
     description: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -125,6 +126,10 @@ class Asset(Base):
     filename: Mapped[str] = mapped_column(String(255), default="")
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     review_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|approved|rejected
+    ark_asset_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    ark_status: Mapped[str] = mapped_column(String(32), default="")
+    ark_url: Mapped[str] = mapped_column(Text, default="")
+    ark_error: Mapped[str] = mapped_column(Text, default="")
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 

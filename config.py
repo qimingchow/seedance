@@ -31,6 +31,19 @@ class Settings:
     # 火山方舟 Ark（Seedance）—— 第二步使用
     ARK_API_KEY: str = os.getenv("ARK_API_KEY", "")
     ARK_BASE_URL: str = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
+    ARK_OPENAPI_ACCESS_KEY: str = os.getenv(
+        "ARK_OPENAPI_ACCESS_KEY", os.getenv("TOS_ACCESS_KEY", "")
+    )
+    ARK_OPENAPI_SECRET_KEY: str = os.getenv(
+        "ARK_OPENAPI_SECRET_KEY", os.getenv("TOS_SECRET_KEY", "")
+    )
+    ARK_OPENAPI_HOST: str = os.getenv("ARK_OPENAPI_HOST", "ark.cn-beijing.volcengineapi.com")
+    ARK_OPENAPI_REGION: str = os.getenv("ARK_OPENAPI_REGION", "cn-beijing")
+    ARK_OPENAPI_VERSION: str = os.getenv("ARK_OPENAPI_VERSION", "2024-01-01")
+    ARK_ASSET_SYNC_ENABLED: bool = _env_bool("ARK_ASSET_SYNC_ENABLED", True)
+    ARK_ASSET_POLL_INTERVAL_SECONDS: int = _env_int("ARK_ASSET_POLL_INTERVAL_SECONDS", 3)
+    ARK_ASSET_POLL_TIMEOUT_SECONDS: int = _env_int("ARK_ASSET_POLL_TIMEOUT_SECONDS", 120)
+    ARK_ASSET_PROJECT_NAME: str = os.getenv("ARK_ASSET_PROJECT_NAME", "").strip()
     SEEDANCE_MODEL_PRO: str = os.getenv(
         "SEEDANCE_MODEL_PRO", "doubao-seedance-2-0-260128"
     )

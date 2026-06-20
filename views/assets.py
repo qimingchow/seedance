@@ -10,6 +10,7 @@ import math
 
 import streamlit as st
 
+import ark_assets
 import asset_store
 import tos_client
 from auth import current_user
@@ -48,6 +49,7 @@ with st.sidebar:
         st.rerun()
     if not tos_client.is_configured():
         st.info("TOS 未配置：删除素材只移除记录，不会删 TOS 对象。", icon="ℹ️")
+    st.caption(f"Ark 资产 OpenAPI：{'可用' if ark_assets.is_configured() else '未配置或未启用'}")
 
 # ---------------- 页头 + 新建组 ----------------
 st.title("🖼️ 私域资产库全览")
@@ -95,6 +97,7 @@ shown_groups = groups[(gpage - 1) * PAGE: gpage * PAGE]
 for g in shown_groups:
     gid = g["id"]
     with st.expander(f"📁 {g['name']} （{g['asset_count']} 个素材）"):
+        st.caption(f"Ark GroupId：{g.get('ark_group_id') or '未同步'}")
         # --- 组管理：重命名 / 删除 ---
         mc1, mc2, mc3 = st.columns([3, 1, 2])
         rename_val = mc1.text_input("重命名", value=g["name"], key=f"rn_{gid}", label_visibility="collapsed")
@@ -121,7 +124,7 @@ for g in shown_groups:
 
         # --- 懒加载：点「加载素材」才拉取并渲染 ---
         loaded_key = f"loaded_{gid}"
-        lc1, lc2 = st.columns([1, 1])
+        lc1, lc2, lc3 = st.columns([1, 1, 1])
         if lc1.button("📥 加载素材", key=f"load_{gid}"):
             st.session_state[loaded_key] = True
         if lc2.button("🔄 刷新本组缓存", key=f"refresh_{gid}"):
@@ -129,6 +132,20 @@ for g in shown_groups:
             cached_groups.clear()
             st.session_state[loaded_key] = True
             st.rerun()
+        if lc3.button(
+            "同步火山素材",
+            key=f"sync_remote_{gid}",
+            disabled=not (ark_assets.is_configured() and g.get("ark_group_id")),
+        ):
+            try:
+                remote_assets = ark_assets.list_assets_in_group(g["ark_group_id"])
+                count = asset_store.sync_remote_assets_for_group(gid, remote_assets)
+                _bust_cache()
+                st.session_state[loaded_key] = True
+                st.success(f"已同步 {count} 个火山素材")
+                st.rerun()
+            except (ark_assets.ArkAssetError, asset_store.AssetError) as e:
+                st.error(str(e))
 
         if st.session_state.get(loaded_key):
             assets = cached_assets(gid)
@@ -155,7 +172,15 @@ for g in shown_groups:
                             "pending": "待审核",
                             "rejected": "已驳回",
                         }.get(a["review_status"], a["review_status"])
-                        st.caption(f"{badge} #{a['id']} · {status_text} · {a['filename'] or a['type']}")
+                        ark_text = f" · Ark {a['ark_asset_id']}" if a.get("ark_asset_id") else ""
+                        st.caption(
+                            f"{badge} #{a['id']} · {status_text}{ark_text} · "
+                            f"{a['filename'] or a['type']}"
+                        )
+                        if a.get("ark_status") and a.get("ark_status") != "Active":
+                            st.caption(f"Ark 状态：{a['ark_status']}")
+                        if a.get("ark_error"):
+                            st.caption(f"Ark 错误：{a['ark_error'][:80]}")
                         st.markdown(f"[打开原文件]({a['tos_url']})")
                         if a["type"] == "image":
                             approved = a["review_status"] == "approved"

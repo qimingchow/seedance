@@ -1,22 +1,36 @@
 """模块 3 · 人脸素材入库系统。
 
-流程：选择文件 → 校验格式 → 上传到 TOS → 提交审核 → 写入资产组（入库为 pending）。
-资产组配置支持：从现有列表选择 / 手动输入 ID / 创建新组。
+流程：选择文件 → 校验格式 → 上传到 TOS → 注册 Ark 资产 → Active 后写入资产组。
+资产组配置支持：从现有列表选择 / 手动输入 Ark GroupId / 创建新组。
 """
 import uuid
 
 import streamlit as st
 
+import ark_assets
 import asset_store
 import review
 import tos_client
 import validation
 from auth import current_user
 
+MAX_FILES = 50
+
 user = current_user()
+ark_ready = ark_assets.is_configured()
+
+
+def _group_label(group: dict) -> str:
+    remote = group.get("ark_group_id") or "未同步"
+    return f"{group['name']} · 本地 #{group['id']} · Ark {remote}"
+
+
+def _refresh_groups() -> list[dict]:
+    return asset_store.list_groups_with_counts()
+
 
 st.title("👤 人脸素材入库系统")
-st.info("流程：选择文件 → 校验格式 → 上传到 TOS → 提交火山引擎审核 → 入库资产组", icon="🧭")
+st.info("流程：选择文件 → 校验格式 → 上传到 TOS → 注册火山 Ark 资产 → Active 后入库资产组", icon="🧭")
 notice = st.session_state.pop("face_notice", None)
 if notice:
     level, message = notice
@@ -36,34 +50,75 @@ with st.sidebar:
         f"**视频** (≤{validation.VID_MAX_MB}MB)：mp4/mov；{validation.VID_MIN_S}~{validation.VID_MAX_S}s；"
         f"{validation.VID_FPS_MIN}~{validation.VID_FPS_MAX}fps；{validation.VID_RES_MIN}p~{validation.VID_RES_MAX}p"
     )
+    st.markdown("### 连接状态")
+    st.caption(f"TOS：{'可用' if tos_client.is_configured() else '未配置'}")
+    st.caption(f"Ark 资产 OpenAPI：{'可用' if ark_ready else '未配置或未启用'}")
     if not tos_client.is_configured():
         st.warning("TOS 未配置：可校验文件，但无法上传入库。", icon="⚠️")
+    if not ark_ready:
+        st.info("Ark 资产 OpenAPI 未配置时，会保留原本的本地 pending 审核流程。", icon="ℹ️")
 
 # ---- 第一步：选择文件 ----
 st.subheader("第一步：选择文件")
 files = st.file_uploader(
-    "选择人脸素材（图片或视频，可多选）",
+    f"选择人脸素材（图片或视频，可多选，最多 {MAX_FILES} 个）",
     accept_multiple_files=True,
     type=sorted(validation.IMAGE_EXTS | validation.VIDEO_EXTS),
 )
+if files and len(files) > MAX_FILES:
+    st.error(f"一次最多提交 {MAX_FILES} 个文件，当前选择了 {len(files)} 个。")
+
+if files:
+    st.caption(f"已选择 {len(files)} 个文件")
+    preview_cols = st.columns(5)
+    for idx, uploaded in enumerate(files[:10]):
+        with preview_cols[idx % 5]:
+            if validation.classify(uploaded.name) == "image":
+                st.image(uploaded.getvalue(), width="stretch")
+            else:
+                st.caption(uploaded.name)
+            st.caption(uploaded.name)
+    if len(files) > 10:
+        st.caption(f"还有 {len(files) - 10} 个文件将在提交时处理。")
 
 # ---- 第二步：资产组配置 ----
 st.subheader("第二步：资产组配置")
-groups = asset_store.list_groups_with_counts()
+groups = _refresh_groups()
+if ark_ready:
+    if st.button("同步火山资产组列表", type="secondary"):
+        try:
+            remote_groups = ark_assets.list_asset_groups()
+            count = asset_store.sync_remote_groups(remote_groups)
+            st.cache_data.clear()
+            st.session_state["face_notice"] = (
+                "success",
+                f"已同步 {count} 个火山 Ark 资产组。",
+            )
+            st.rerun()
+        except ark_assets.ArkAssetError as exc:
+            st.error(f"同步资产组失败：{exc}")
+
 group_name_to_id = {g["name"]: g["id"] for g in groups}
-mode = st.radio("组操作", ["从现有列表中选择", "手动输入 ID", "创建新组"], horizontal=True)
+group_labels = {_group_label(g): g["id"] for g in groups}
+mode_options = ["从现有列表中选择", "手动输入 Ark GroupId", "创建新组"]
+mode = st.radio("组操作", mode_options, horizontal=True)
 
 target_group_id = None
+manual_ark_group_id = ""
+manual_group_name = ""
 new_group_name = ""
 new_group_desc = ""
 if mode == "从现有列表中选择":
     if groups:
-        sel = st.selectbox("选择资产组", list(group_name_to_id.keys()))
-        target_group_id = group_name_to_id.get(sel)
+        sel = st.selectbox("选择资产组", list(group_labels.keys()))
+        target_group_id = group_labels.get(sel)
     else:
         st.caption("还没有资产组，请切换到「创建新组」。")
-elif mode == "手动输入 ID":
-    target_group_id = int(st.number_input("资产组 ID", min_value=1, step=1, value=1))
+elif mode == "手动输入 Ark GroupId":
+    manual_ark_group_id = st.text_input("Ark GroupId")
+    manual_group_name = st.text_input("本地显示名称（可选）")
+    if not ark_ready:
+        st.warning("手动输入 Ark GroupId 需要先配置 Ark 资产 OpenAPI。")
 else:
     new_group_name = st.text_input("新资产组名称")
     new_group_desc = st.text_input("描述（可选）")
@@ -81,17 +136,23 @@ else:
             group_id = asset_store.create_group(clean_group_name, new_group_desc)
             st.session_state["face_notice"] = (
                 "success",
-                f"已创建资产组 #{group_id}：{clean_group_name}。现在可切换到「从现有列表中选择」使用。",
+                f"已创建资产组 #{group_id}：{clean_group_name}。",
             )
+            st.cache_data.clear()
             st.rerun()
         except asset_store.AssetError as e:
             st.error(str(e))
     st.caption("也可以选择文件后直接点击下方批量提交，系统会自动创建该组并入库。")
 
 # ---- 提交 ----
-submit = st.button("🚀 批量提交并开始审核", type="primary", disabled=not files)
+submit_label = "上传并注册 Ark 资产" if ark_ready else "批量提交并开始本地审核"
+submit = st.button(f"🚀 {submit_label}", type="primary", disabled=not files)
 
 if submit:
+    if files and len(files) > MAX_FILES:
+        st.error(f"一次最多提交 {MAX_FILES} 个文件，请减少后重试。")
+        st.stop()
+
     # 解析目标资产组
     try:
         if mode == "创建新组":
@@ -102,13 +163,33 @@ if submit:
             target_group_id = group_name_to_id.get(clean_group_name)
             if target_group_id is None:
                 target_group_id = asset_store.create_group(clean_group_name, new_group_desc)
-        elif mode == "手动输入 ID":
-            if not any(g["id"] == target_group_id for g in groups):
-                st.error(f"资产组 ID {target_group_id} 不存在")
+        elif mode == "手动输入 Ark GroupId":
+            clean_ark_group_id = manual_ark_group_id.strip()
+            if not clean_ark_group_id:
+                st.error("请填写 Ark GroupId")
                 st.stop()
+            if not ark_ready:
+                st.error("Ark 资产 OpenAPI 未配置，无法使用远端 GroupId。")
+                st.stop()
+            remote_group = asset_store.get_group_by_ark_id(clean_ark_group_id)
+            if remote_group:
+                target_group_id = remote_group["id"]
+            else:
+                local_name = manual_group_name.strip() or f"ark_{clean_ark_group_id[-8:]}"
+                target_group_id = asset_store.upsert_remote_group(
+                    local_name,
+                    clean_ark_group_id,
+                    "手动输入的火山 Ark 资产组",
+                )
         elif target_group_id is None:
             st.error("请先选择或创建资产组")
             st.stop()
+    except asset_store.AssetError as e:
+        st.error(str(e))
+        st.stop()
+
+    try:
+        ark_group_id = asset_store.ensure_remote_group(target_group_id) if ark_ready else ""
     except asset_store.AssetError as e:
         st.error(str(e))
         st.stop()
@@ -123,18 +204,66 @@ if submit:
         elif not tos_client.is_configured():
             results.append((f.name, "⚠️ 已校验·未上传", f"{msg}；TOS 未配置"))
         else:
+            key = f"face/{target_group_id}/{uuid.uuid4().hex}_{f.name}"
             try:
-                key = f"face/{target_group_id}/{uuid.uuid4().hex}_{f.name}"
                 url = tos_client.upload_bytes(key, data, content_type=getattr(f, "type", None))
-                status = review.submit_for_review(
-                    {"filename": f.name, "type": kind, "tos_url": url}
-                )
-                asset_store.add_asset(
-                    target_group_id, asset_type=kind, tos_url=url, tos_key=key,
-                    filename=f.name, size_bytes=len(data), review_status=status,
+                source_url = tos_client.access_url(key)
+                if ark_group_id:
+                    active = ark_assets.submit_and_wait(
+                        ark_group_id,
+                        source_url,
+                        asset_name=f.name,
+                        asset_type="Image" if kind == "image" else "Video",
+                    )
+                    asset_id = asset_store.add_asset(
+                        target_group_id,
+                        asset_type=kind,
+                        tos_url=url,
+                        tos_key=key,
+                        filename=f.name,
+                        size_bytes=len(data),
+                        review_status="approved",
+                        ark_asset_id=str(active.get("id") or ""),
+                        ark_status=str(active.get("status") or "Active"),
+                        ark_url=str(active.get("url") or source_url),
+                        uploaded_by=(user.id if user else None),
+                    )
+                    results.append(
+                        (
+                            f.name,
+                            "✅ Ark 已激活",
+                            f"{msg}；本地素材 #{asset_id}；Ark AssetId：{active.get('id')}",
+                        )
+                    )
+                else:
+                    status = review.submit_for_review(
+                        {"filename": f.name, "type": kind, "tos_url": url}
+                    )
+                    asset_store.add_asset(
+                        target_group_id,
+                        asset_type=kind,
+                        tos_url=url,
+                        tos_key=key,
+                        filename=f.name,
+                        size_bytes=len(data),
+                        review_status=status,
+                        uploaded_by=(user.id if user else None),
+                    )
+                    results.append((f.name, "✅ 已入库", f"{msg}；审核状态：{status}"))
+            except ark_assets.ArkAssetError as e:
+                asset_id = asset_store.add_asset(
+                    target_group_id,
+                    asset_type=kind or "image",
+                    tos_url=tos_client.access_url(key),
+                    tos_key=key,
+                    filename=f.name,
+                    size_bytes=len(data),
+                    review_status="rejected",
+                    ark_status="Failed",
+                    ark_error=str(e),
                     uploaded_by=(user.id if user else None),
                 )
-                results.append((f.name, "✅ 已入库", f"{msg}；审核状态：{status}"))
+                results.append((f.name, "❌ Ark 注册失败", f"本地记录 #{asset_id}；{e}"))
             except Exception as e:
                 results.append((f.name, "❌ 上传失败", str(e)))
         bar.progress((i + 1) / len(files), text=f"已处理 {i + 1}/{len(files)}")
@@ -153,7 +282,10 @@ if submit:
             "它们才会进入创作场快速资产库和 Asset ID 引用。",
             icon="⏳",
         )
-    st.caption(
-        "入库素材默认为待审核（pending）。管理员在「管理后台 → 素材审核」批准后，"
-        "图片即可在创作场「选用首帧」中引用。"
-    )
+    if ark_ready:
+        st.caption("Ark 返回 Active 后，素材会直接进入已批准状态，可在创作场作为资产引用。")
+    else:
+        st.caption(
+            "入库素材默认为待审核（pending）。管理员在「管理后台 → 素材审核」批准后，"
+            "图片即可在创作场「选用首帧」中引用。"
+        )

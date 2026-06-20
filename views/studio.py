@@ -48,6 +48,31 @@ def _parse_asset_ids(raw: str) -> list[int]:
     return list(dict.fromkeys(ids))
 
 
+def _parse_direct_asset_refs(raw: str) -> list[str]:
+    """解析手动输入的 Ark AssetId，统一转为 Seedance 支持的 asset:// 引用。"""
+    refs: list[str] = []
+    seen: set[str] = set()
+    for part in (raw or "").replace(",", "\n").splitlines():
+        token = part.strip()
+        if not token or token.lstrip("#").isdigit():
+            continue
+        if token.startswith("asset://"):
+            ref = token
+        else:
+            ref = f"asset://{token}"
+        if ref not in seen:
+            refs.append(ref)
+            seen.add(ref)
+    return refs
+
+
+def _asset_reference(asset: dict) -> str:
+    ark_asset_id = (asset.get("ark_asset_id") or "").strip()
+    if ark_asset_id:
+        return f"asset://{ark_asset_id}"
+    return asset["tos_url"]
+
+
 def _append_state_url(key: str, url: str) -> None:
     current = _split_lines(st.session_state.get(key, ""))
     if url and url not in current:
@@ -154,15 +179,15 @@ with st.sidebar:
         type=["mp4", "mov", "webm"],
     )
     asset_ids_raw = st.text_area(
-        "输入 Asset ID（每行一个）",
+        "输入本地素材 ID 或 Ark AssetId（每行一个）",
         height=80,
-        placeholder="例如：\n12\n18",
+        placeholder="例如：\n12\nasset-xxxx\nasset://asset-yyyy",
     )
     reference_image_urls_raw = st.text_area(
-        "参考图片 URL（每行一个）",
+        "参考图片 URL / asset://Ark AssetId（每行一个）",
         key="reference_image_urls",
         height=100,
-        placeholder="https://...",
+        placeholder="https://...\nasset://asset-xxxx",
     )
     uploaded_images = st.file_uploader(
         "上传参考图（支持多选）",
@@ -194,7 +219,13 @@ has_prompt = bool(prompt.strip())
 with st.expander("🖼️ 快速访问私域资产库"):
     ref_imgs = asset_store.list_image_assets_for_reference()
     if ref_imgs:
-        labels = {f"#{r['id']} {r['filename'] or '(无名)'}": r["tos_url"] for r in ref_imgs}
+        labels = {
+            (
+                f"#{r['id']} {r['filename'] or '(无名)'}"
+                + (f" · Ark {r['ark_asset_id']}" if r.get("ark_asset_id") else "")
+            ): _asset_reference(r)
+            for r in ref_imgs
+        }
         pick = st.selectbox("选择已审核通过的图片素材", ["（不选）"] + list(labels.keys()))
         if pick != "（不选）" and st.button("加入参考图"):
             _queue_state_url("reference_image_urls", labels[pick])
@@ -275,16 +306,18 @@ if go:
     audio_urls = _split_lines(reference_audio_urls_raw)
 
     asset_ids = _parse_asset_ids(asset_ids_raw)
+    direct_asset_refs = _parse_direct_asset_refs(asset_ids_raw)
     missing_asset_ids: list[int] = []
+    image_urls.extend(direct_asset_refs)
     if asset_ids:
         approved_assets = asset_store.list_assets_by_ids(asset_ids)
         found_ids = {a["id"] for a in approved_assets}
         missing_asset_ids = [i for i in asset_ids if i not in found_ids]
         for asset in approved_assets:
             if asset["type"] == "image":
-                image_urls.append(asset["tos_url"])
+                image_urls.append(_asset_reference(asset))
             elif asset["type"] == "video":
-                video_urls.append(asset["tos_url"])
+                video_urls.append(_asset_reference(asset))
 
     preupload_video_count = len(video_urls) + len(uploaded_videos or [])
     preupload_input_duration = pricing.estimate_reference_video_seconds(
@@ -356,6 +389,7 @@ if go:
         "web_search": web_search,
         "first_last_mode": first_last_mode,
         "asset_ids": asset_ids,
+        "direct_asset_refs": direct_asset_refs,
         "image_urls": image_urls,
         "video_urls": video_urls,
         "audio_urls": audio_urls,
