@@ -34,11 +34,47 @@ class ArkAssetError(Exception):
     pass
 
 
+def _setting(name: str, default: Any = "") -> Any:
+    return getattr(settings, name, default)
+
+
+def _ark_access_key() -> str:
+    return str(_setting("ARK_OPENAPI_ACCESS_KEY", _setting("TOS_ACCESS_KEY", "")) or "")
+
+
+def _ark_secret_key() -> str:
+    return str(_setting("ARK_OPENAPI_SECRET_KEY", _setting("TOS_SECRET_KEY", "")) or "")
+
+
+def _ark_host() -> str:
+    return str(_setting("ARK_OPENAPI_HOST", "ark.cn-beijing.volcengineapi.com") or "")
+
+
+def _ark_region() -> str:
+    return str(_setting("ARK_OPENAPI_REGION", "cn-beijing") or "")
+
+
+def _ark_version() -> str:
+    return str(_setting("ARK_OPENAPI_VERSION", "2024-01-01") or "")
+
+
+def _ark_project_name() -> str:
+    return str(_setting("ARK_ASSET_PROJECT_NAME", "") or "").strip()
+
+
+def _ark_poll_interval_seconds() -> int:
+    return max(int(_setting("ARK_ASSET_POLL_INTERVAL_SECONDS", 3) or 3), 1)
+
+
+def _ark_poll_timeout_seconds() -> int:
+    return max(int(_setting("ARK_ASSET_POLL_TIMEOUT_SECONDS", 120) or 120), 1)
+
+
 def is_configured() -> bool:
     return bool(
-        settings.ARK_ASSET_SYNC_ENABLED
-        and settings.ARK_OPENAPI_ACCESS_KEY
-        and settings.ARK_OPENAPI_SECRET_KEY
+        bool(_setting("ARK_ASSET_SYNC_ENABLED", True))
+        and _ark_access_key()
+        and _ark_secret_key()
     )
 
 
@@ -90,8 +126,12 @@ def _request(action: str, payload: dict[str, Any] | None = None) -> dict[str, An
     content_hash = _hash_sha256(body)
     query = {
         "Action": action,
-        "Version": settings.ARK_OPENAPI_VERSION,
+        "Version": _ark_version(),
     }
+    host = _ark_host()
+    region = _ark_region()
+    access_key = _ark_access_key()
+    secret_key = _ark_secret_key()
     canonical_request = "\n".join(
         [
             "POST",
@@ -100,7 +140,7 @@ def _request(action: str, payload: dict[str, Any] | None = None) -> dict[str, An
             "\n".join(
                 [
                     f"content-type:{CONTENT_TYPE}",
-                    f"host:{settings.ARK_OPENAPI_HOST}",
+                    f"host:{host}",
                     f"x-content-sha256:{content_hash}",
                     f"x-date:{x_date}",
                 ]
@@ -111,7 +151,7 @@ def _request(action: str, payload: dict[str, Any] | None = None) -> dict[str, An
         ]
     )
     credential_scope = "/".join(
-        [short_date, settings.ARK_OPENAPI_REGION, SERVICE, "request"]
+        [short_date, region, SERVICE, "request"]
     )
     string_to_sign = "\n".join(
         [
@@ -122,26 +162,26 @@ def _request(action: str, payload: dict[str, Any] | None = None) -> dict[str, An
         ]
     )
     key_date = _hmac_sha256(
-        settings.ARK_OPENAPI_SECRET_KEY.encode("utf-8"), short_date
+        secret_key.encode("utf-8"), short_date
     )
-    key_region = _hmac_sha256(key_date, settings.ARK_OPENAPI_REGION)
+    key_region = _hmac_sha256(key_date, region)
     key_service = _hmac_sha256(key_region, SERVICE)
     key_signing = _hmac_sha256(key_service, "request")
     signature = _hmac_sha256(key_signing, string_to_sign).hex()
 
     headers = {
-        "Host": settings.ARK_OPENAPI_HOST,
+        "Host": host,
         "X-Content-Sha256": content_hash,
         "X-Date": x_date,
         "Content-Type": CONTENT_TYPE,
         "Authorization": (
             "HMAC-SHA256 "
-            f"Credential={settings.ARK_OPENAPI_ACCESS_KEY}/{credential_scope}, "
+            f"Credential={access_key}/{credential_scope}, "
             "SignedHeaders=content-type;host;x-content-sha256;x-date, "
             f"Signature={signature}"
         ),
     }
-    url = f"https://{settings.ARK_OPENAPI_HOST}{PATH}"
+    url = f"https://{host}{PATH}"
     try:
         response = requests.post(
             url,
@@ -177,9 +217,10 @@ def _request(action: str, payload: dict[str, Any] | None = None) -> dict[str, An
 
 
 def _with_project(payload: dict[str, Any]) -> dict[str, Any]:
-    if settings.ARK_ASSET_PROJECT_NAME:
+    project_name = _ark_project_name()
+    if project_name:
         payload = dict(payload)
-        payload["ProjectName"] = settings.ARK_ASSET_PROJECT_NAME
+        payload["ProjectName"] = project_name
     return payload
 
 
@@ -284,8 +325,8 @@ def get_asset(asset_id: str) -> dict[str, Any]:
 
 
 def wait_for_asset_active(asset_id: str) -> dict[str, Any]:
-    deadline = time.time() + settings.ARK_ASSET_POLL_TIMEOUT_SECONDS
-    interval = max(settings.ARK_ASSET_POLL_INTERVAL_SECONDS, 1)
+    deadline = time.time() + _ark_poll_timeout_seconds()
+    interval = _ark_poll_interval_seconds()
     last: dict[str, Any] = {}
     while time.time() < deadline:
         last = get_asset(asset_id)

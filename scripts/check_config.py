@@ -38,6 +38,10 @@ def _mask_url(value: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
+def _setting(name: str, default=""):
+    return getattr(settings, name, default)
+
+
 def main() -> None:
     init_db()
     print("DATABASE_URL:", _mask_url(settings.DATABASE_URL))
@@ -45,9 +49,9 @@ def main() -> None:
     print("ACCOUNT_EXTERNAL_USED_TOKENS:", settings.ACCOUNT_EXTERNAL_USED_TOKENS)
     print("ARK_API_KEY:", _mask(settings.ARK_API_KEY))
     print("ARK_BASE_URL:", settings.ARK_BASE_URL)
-    print("ARK_OPENAPI_ACCESS_KEY:", _mask(settings.ARK_OPENAPI_ACCESS_KEY))
-    print("ARK_OPENAPI_HOST:", settings.ARK_OPENAPI_HOST)
-    print("ARK_ASSET_SYNC_ENABLED:", settings.ARK_ASSET_SYNC_ENABLED)
+    print("ARK_OPENAPI_ACCESS_KEY:", _mask(_setting("ARK_OPENAPI_ACCESS_KEY")))
+    print("ARK_OPENAPI_HOST:", _setting("ARK_OPENAPI_HOST", "ark.cn-beijing.volcengineapi.com"))
+    print("ARK_ASSET_SYNC_ENABLED:", _setting("ARK_ASSET_SYNC_ENABLED", True))
     print("ARK_ASSET_CONFIGURED:", ark_assets.is_configured())
     print("SEEDANCE_MODEL_PRO:", settings.SEEDANCE_MODEL_PRO)
     print("SEEDANCE_MODEL_FAST:", settings.SEEDANCE_MODEL_FAST)
